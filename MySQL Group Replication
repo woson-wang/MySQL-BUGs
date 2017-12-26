@@ -1,0 +1,59 @@
+Find a bug while using MySQL Group Replication these days, and i report it on the http://bugs.mysql.com/89058
+And here's some details:
+**Description *:	**
+In my MGR cluster (Multi-primary Mode), I open session-1 to change a column("alter table sbtest1 modify name varchar(300) NOT NULL DEFAULT 'Anna';"), and at the same time, I open session-2(on the other server) to execute "update sbtest1 set k='55826450' where id < 1000000;".
+    Then i can get the UPDATE result at session-2 immediately, and when session-1 finished its work, all servers' table sbtest1 got the right structure(became varchar(300)). But the server of session-1 got error and it's been rejected from the MGR Cluster.
+
+>select * from performance_schema.replication_group_members;
++---------------------------+--------------------------------------+----------------------+-------------+--------------+
+| CHANNEL_NAME              | MEMBER_ID                            | MEMBER_HOST          | MEMBER_PORT | MEMBER_STATE |
++---------------------------+--------------------------------------+----------------------+-------------+--------------+
+| group_replication_applier | ********-****-****-****-********** | mgr01 |        3301 | ERROR        |
++---------------------------+--------------------------------------+----------------------+-------------+--------------+
+
+
+Table infomation:
+CREATE TABLE `sbtest1` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `k` int(11) NOT NULL DEFAULT '0',
+  `c` char(120) NOT NULL DEFAULT '',
+  `pad` char(60) NOT NULL DEFAULT '',
+  `name` varchar(30) NOT NULL DEFAULT 'aaa',
+  PRIMARY KEY (`id`),
+  KEY `k_1` (`k`)
+) ENGINE=InnoDB AUTO_INCREMENT=69999999 DEFAULT CHARSET=utf8
+
+And the error log:
+2017-12-26T19:50:43.589883+08:00 169 [ERROR] Slave SQL for channel 'group_replication_applier': Worker 1 failed executing transaction '********-****-****-****-**********:12630621' at master log , end_log_pos 8307; Column 4 of table 'db2.sbtest1' cannot be converted from type 'varchar(90(bytes))' to type 'varchar(900(bytes) utf8)', Error_code: 1677
+2017-12-26T19:50:43.589972+08:00 168 [Warning] Slave SQL for channel 'group_replication_applier': ... The slave coordinator and worker threads are stopped, possibly leaving data in inconsistent state. A restart should restore consistency automatically, although using non-transactional storage for data or info tables or DDL queries could lead to problems. In such cases you have to examine your data (see documentation for details). Error_code: 1756
+2017-12-26T19:50:43.590005+08:00 168 [Note] Slave SQL thread for channel 'group_replication_applier' exiting, replication stopped in log 'FIRST' at position 65
+2017-12-26T19:50:43.590027+08:00 168 [ERROR] Plugin group_replication reported: 'The applier thread execution was aborted. Unable to process more transactions, this member will now leave the group.'
+2017-12-26T19:50:43.590069+08:00 165 [ERROR] Plugin group_replication reported: 'Fatal error during execution on the Applier process of Group Replication. The server will now leave the group.'
+2017-12-26T19:50:43.590157+08:00 165 [ERROR] Plugin group_replication reported: 'The server was automatically set into read only mode after an error was detected.'
+2017-12-26T19:50:43.597345+08:00 165 [Note] Plugin group_replication reported: 'The group replication applier thread was killed'
+2017-12-26T19:50:43.598323+08:00 0 [Note] Plugin group_replication reported: 'getstart group_id b36e8820'
+2017-12-26T19:50:46.969387+08:00 0 [Note] Plugin group_replication reported: 'state 4410 action xa_terminate'
+2017-12-26T19:50:46.969750+08:00 0 [Note] Plugin group_replication reported: 'new state x_start'
+2017-12-26T19:50:46.969775+08:00 0 [Note] Plugin group_replication reported: 'state 4337 action xa_exit'
+2017-12-26T19:50:46.969841+08:00 0 [Note] Plugin group_replication reported: 'Exiting xcom thread'
+2017-12-26T19:50:46.969865+08:00 0 [Note] Plugin group_replication reported: 'new state x_start'
+2017-12-26T19:50:47.017520+08:00 0 [Note] Plugin group_replication reported: 'Group membership changed: This member has left the group.'
+
+
+
+**How to repeat *:	**
+Server-1:
+In a table which contain varchar type column(eg:sbtest1, you can find an example at Description part.):
+"alter table sbtest1 modify name varchar(300) NOT NULL DEFAULT 'Anna';"
+
+Server-2:
+update sbtest1 set k='55826450' where id < 1000000;
+
+Then you can find error log at Server-1 after both of the queries done.
+
+
+**Suggested fix:	**
+According to the document of MySQL website:
+https://dev.mysql.com/doc/refman/5.7/en/group-replication-limitations.html
+
+This is one kind of situation we will meet while executing concurrent DDL and DML at MGR Cluster.
